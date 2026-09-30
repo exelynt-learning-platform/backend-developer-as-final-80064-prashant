@@ -1,0 +1,29 @@
+server:
+  port: 0
+
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+  h2:
+    console:
+      enabled: false
+
+app:
+  jwt:
+    secret: "testSecretKeyForResourceBookingSystemTestsMustBeAtLeast256BitsLong2026!"
+    expiration-ms: 86400000
+  seed:
+    enabled: true
+    admin-username: "admin"
+    admin-password: "admin123"
+    admin-email: "admin@exelynt.com"
+    user-username: "user"
+    user-password: "user123"
+    user-email: "user@exelynt.com"

@@ -1,0 +1,5 @@
+app:
+  jwt:
+    secret: ${JWT_SECRET:devSecretKeyForLocalDevelopmentAndEvaluationMustBeAtLeast256BitsLong2026!}
+  seed:
+    enabled: true
