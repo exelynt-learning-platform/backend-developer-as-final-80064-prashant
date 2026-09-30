@@ -1,6 +1,7 @@
 package com.exelynt.booking.service;
 
 import com.exelynt.booking.dto.PaginatedResponse;
+import com.exelynt.booking.dto.ReservationQueryFilter;
 import com.exelynt.booking.dto.ReservationRequest;
 import com.exelynt.booking.dto.ReservationResponse;
 import com.exelynt.booking.entity.Reservation;
@@ -32,6 +33,10 @@ import java.util.List;
 @Service
 public class ReservationService {
 
+    public static final String SORT_ALIAS_PRICE = "price";
+    public static final String TARGET_SORT_FIELD_PRICE = "totalPrice";
+    public static final String DEFAULT_SORT_FIELD = "createdAt";
+
     private final ReservationRepository reservationRepository;
     private final ResourceRepository resourceRepository;
     private final UserRepository userRepository;
@@ -45,18 +50,19 @@ public class ReservationService {
     }
 
     @Transactional
-    public ReservationResponse createReservation(ReservationRequest request, String currentUsername) {
+    public ReservationResponse createReservation(ReservationRequest request, String currentUsername, boolean isAdmin) {
         User user = userRepository.findByUsername(currentUsername)
                 .orElseThrow(() -> new BadRequestException("Authenticated user not found: " + currentUsername));
 
-        Resource resource = resourceRepository.findById(request.getResourceId())
+        // Pessimistic lock prevents concurrent double-booking of the same resource
+        Resource resource = resourceRepository.findByIdWithLock(request.getResourceId())
                 .orElseThrow(() -> new ResourceNotFoundException("Resource not found with id: " + request.getResourceId()));
 
         if (!resource.isAvailable()) {
             throw new BadRequestException("Resource '" + resource.getName() + "' is not available for booking");
         }
 
-        validateReservationTimes(request.getStartTime(), request.getEndTime());
+        validateTimesForCreation(request.getStartTime(), request.getEndTime());
 
         // Check for conflicting reservations on the same resource
         List<Reservation> conflicts = reservationRepository.findOverlappingReservations(
@@ -73,14 +79,16 @@ public class ReservationService {
             );
         }
 
-        // Calculate or validate price
+        // Price calculation: Only ADMIN can supply manual price overrides to prevent user manipulation
         BigDecimal totalPrice;
-        if (request.getPrice() != null && request.getPrice().compareTo(BigDecimal.ZERO) >= 0) {
+        if (isAdmin && request.getPrice() != null && request.getPrice().compareTo(BigDecimal.ZERO) >= 0) {
             totalPrice = request.getPrice().setScale(2, RoundingMode.HALF_UP);
         } else {
             long minutes = Duration.between(request.getStartTime(), request.getEndTime()).toMinutes();
-            double hours = Math.max(1.0, (double) minutes / 60.0);
-            totalPrice = resource.getBasePrice().multiply(BigDecimal.valueOf(hours)).setScale(2, RoundingMode.HALF_UP);
+            long billableHours = Math.max(1L, (minutes + 59) / 60); // Round up to nearest whole hour, min 1
+            totalPrice = resource.getBasePrice()
+                    .multiply(BigDecimal.valueOf(billableHours))
+                    .setScale(2, RoundingMode.HALF_UP);
         }
 
         Reservation reservation = new Reservation(
@@ -99,15 +107,9 @@ public class ReservationService {
 
     @Transactional(readOnly = true)
     public PaginatedResponse<ReservationResponse> getReservations(
+            ReservationQueryFilter filter,
             String currentUsername,
-            boolean isAdmin,
-            ReservationStatus status,
-            BigDecimal minPrice,
-            BigDecimal maxPrice,
-            int page,
-            int size,
-            String sortBy,
-            String sortDir
+            boolean isAdmin
     ) {
         Long userId = null;
         if (!isAdmin) {
@@ -116,17 +118,21 @@ public class ReservationService {
             userId = user.getId();
         }
 
-        Sort.Direction direction = "desc".equalsIgnoreCase(sortDir) ? Sort.Direction.DESC : Sort.Direction.ASC;
-        String property = (sortBy != null && !sortBy.trim().isEmpty()) ? sortBy.trim() : "createdAt";
+        Sort.Direction direction = "desc".equalsIgnoreCase(filter.getSortDir()) ? Sort.Direction.DESC : Sort.Direction.ASC;
+        String property = (filter.getSortBy() != null && !filter.getSortBy().trim().isEmpty())
+                ? filter.getSortBy().trim()
+                : DEFAULT_SORT_FIELD;
 
         // Map client friendly sort property aliases
-        if ("price".equalsIgnoreCase(property)) {
-            property = "totalPrice";
+        if (SORT_ALIAS_PRICE.equalsIgnoreCase(property)) {
+            property = TARGET_SORT_FIELD_PRICE;
         }
 
-        Pageable pageable = PageRequest.of(page, size, Sort.by(direction, property));
+        Pageable pageable = PageRequest.of(filter.getPage(), filter.getSize(), Sort.by(direction, property));
 
-        Specification<Reservation> spec = ReservationSpecification.filterReservations(userId, status, minPrice, maxPrice);
+        Specification<Reservation> spec = ReservationSpecification.filterReservations(
+                userId, filter.getStatus(), filter.getMinPrice(), filter.getMaxPrice()
+        );
         Page<Reservation> reservationPage = reservationRepository.findAll(spec, pageable);
 
         Page<ReservationResponse> responsePage = reservationPage.map(ReservationResponse::fromEntity);
@@ -185,10 +191,10 @@ public class ReservationService {
         Reservation reservation = reservationRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Reservation not found with id: " + id));
 
-        Resource resource = resourceRepository.findById(request.getResourceId())
+        Resource resource = resourceRepository.findByIdWithLock(request.getResourceId())
                 .orElseThrow(() -> new ResourceNotFoundException("Resource not found with id: " + request.getResourceId()));
 
-        validateReservationTimes(request.getStartTime(), request.getEndTime());
+        validateTimesForUpdate(request.getStartTime(), request.getEndTime());
 
         List<Reservation> conflicts = reservationRepository.findOverlappingReservationsExcludingId(
                 resource.getId(),
@@ -205,8 +211,12 @@ public class ReservationService {
         reservation.setResource(resource);
         reservation.setStartTime(request.getStartTime());
         reservation.setEndTime(request.getEndTime());
-        if (request.getPrice() != null) {
+        if (request.getPrice() != null && request.getPrice().compareTo(BigDecimal.ZERO) >= 0) {
             reservation.setTotalPrice(request.getPrice().setScale(2, RoundingMode.HALF_UP));
+        } else {
+            long minutes = Duration.between(request.getStartTime(), request.getEndTime()).toMinutes();
+            long billableHours = Math.max(1L, (minutes + 59) / 60);
+            reservation.setTotalPrice(resource.getBasePrice().multiply(BigDecimal.valueOf(billableHours)).setScale(2, RoundingMode.HALF_UP));
         }
         reservation.setNotes(request.getNotes());
 
@@ -222,7 +232,7 @@ public class ReservationService {
         reservationRepository.deleteById(id);
     }
 
-    private void validateReservationTimes(LocalDateTime startTime, LocalDateTime endTime) {
+    private void validateTimesForCreation(LocalDateTime startTime, LocalDateTime endTime) {
         if (startTime == null || endTime == null) {
             throw new BadRequestException("Start time and end time are required");
         }
@@ -231,8 +241,19 @@ public class ReservationService {
             throw new BadRequestException("Start time must be before end time");
         }
 
-        if (startTime.isBefore(LocalDateTime.now())) {
+        // Allow 60 seconds clock skew tolerance for validation
+        if (startTime.isBefore(LocalDateTime.now().minusSeconds(60))) {
             throw new BadRequestException("Start time cannot be in the past");
+        }
+    }
+
+    private void validateTimesForUpdate(LocalDateTime startTime, LocalDateTime endTime) {
+        if (startTime == null || endTime == null) {
+            throw new BadRequestException("Start time and end time are required");
+        }
+
+        if (!startTime.isBefore(endTime)) {
+            throw new BadRequestException("Start time must be before end time");
         }
     }
 }

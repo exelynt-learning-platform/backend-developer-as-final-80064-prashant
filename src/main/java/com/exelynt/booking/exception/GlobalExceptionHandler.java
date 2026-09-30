@@ -119,7 +119,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGlobalException(Exception ex, HttpServletRequest request) {
-        logger.error("Unhandled exception occurred at path: " + request.getRequestURI(), ex);
+        logger.error("Unhandled exception occurred at path: {}", request.getRequestURI(), ex);
         ErrorResponse errorResponse = new ErrorResponse(
                 HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 HttpStatus.INTERNAL_SERVER_ERROR.getReasonPhrase(),

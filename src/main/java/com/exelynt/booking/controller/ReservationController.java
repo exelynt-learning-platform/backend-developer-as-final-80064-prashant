@@ -1,24 +1,22 @@
 package com.exelynt.booking.controller;
 
 import com.exelynt.booking.dto.PaginatedResponse;
+import com.exelynt.booking.dto.ReservationQueryFilter;
 import com.exelynt.booking.dto.ReservationRequest;
 import com.exelynt.booking.dto.ReservationResponse;
 import com.exelynt.booking.dto.ReservationStatusUpdateRequest;
-import com.exelynt.booking.entity.ReservationStatus;
+import com.exelynt.booking.security.UserPrincipal;
 import com.exelynt.booking.service.ReservationService;
 import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
-
-import java.math.BigDecimal;
 
 @RestController
 @RequestMapping("/api/reservations")
@@ -38,10 +36,9 @@ public class ReservationController {
             description = "Creates a reservation for a bookable resource. The user's identity is strictly extracted from the JWT token.")
     public ResponseEntity<ReservationResponse> createReservation(
             @Valid @RequestBody ReservationRequest request,
-            Authentication authentication
+            @AuthenticationPrincipal UserPrincipal principal
     ) {
-        String currentUsername = authentication.getName();
-        ReservationResponse response = reservationService.createReservation(request, currentUsername);
+        ReservationResponse response = reservationService.createReservation(request, principal.getUsername(), principal.isAdmin());
         return new ResponseEntity<>(response, HttpStatus.CREATED);
     }
 
@@ -50,38 +47,14 @@ public class ReservationController {
     @Operation(summary = "Get reservations with filtering, pagination, and sorting",
             description = "ADMINs see all reservations across all users. Regular USERs see only their own reservations. Supports filtering by status, minPrice, maxPrice, and pagination/sorting.")
     public ResponseEntity<PaginatedResponse<ReservationResponse>> getReservations(
-            @Parameter(description = "Filter by reservation status (PENDING, CONFIRMED, CANCELLED)")
-            @RequestParam(required = false) ReservationStatus status,
-            @Parameter(description = "Filter by minimum price (decimal)")
-            @RequestParam(required = false) BigDecimal minPrice,
-            @Parameter(description = "Filter by maximum price (decimal)")
-            @RequestParam(required = false) BigDecimal maxPrice,
-            @Parameter(description = "Page number (0-indexed)")
-            @RequestParam(defaultValue = "0") int page,
-            @Parameter(description = "Number of items per page")
-            @RequestParam(defaultValue = "10") int size,
-            @Parameter(description = "Field to sort by (e.g., createdAt, totalPrice, startTime)")
-            @RequestParam(defaultValue = "createdAt") String sortBy,
-            @Parameter(description = "Sort direction (asc or desc)")
-            @RequestParam(defaultValue = "desc") String sortDir,
-            Authentication authentication
+            @ParameterObject @ModelAttribute ReservationQueryFilter filter,
+            @AuthenticationPrincipal UserPrincipal principal
     ) {
-        boolean isAdmin = authentication.getAuthorities().stream()
-                .map(GrantedAuthority::getAuthority)
-                .anyMatch(a -> a.equals("ROLE_ADMIN"));
-
         PaginatedResponse<ReservationResponse> response = reservationService.getReservations(
-                authentication.getName(),
-                isAdmin,
-                status,
-                minPrice,
-                maxPrice,
-                page,
-                size,
-                sortBy,
-                sortDir
+                filter,
+                principal.getUsername(),
+                principal.isAdmin()
         );
-
         return ResponseEntity.ok(response);
     }
 
@@ -91,34 +64,26 @@ public class ReservationController {
             description = "Retrieves reservation details. ADMINs can view any reservation. Regular USERs can only view their own.")
     public ResponseEntity<ReservationResponse> getReservationById(
             @PathVariable Long id,
-            Authentication authentication
+            @AuthenticationPrincipal UserPrincipal principal
     ) {
-        boolean isAdmin = authentication.getAuthorities().stream()
-                .map(GrantedAuthority::getAuthority)
-                .anyMatch(a -> a.equals("ROLE_ADMIN"));
-
-        ReservationResponse response = reservationService.getReservationById(id, authentication.getName(), isAdmin);
+        ReservationResponse response = reservationService.getReservationById(id, principal.getUsername(), principal.isAdmin());
         return ResponseEntity.ok(response);
     }
 
     @PatchMapping("/{id}/status")
     @PreAuthorize("hasAnyRole('USER', 'ADMIN')")
-    @Operation(summary = "Update reservation status",
+    @Operation(summary = "Update reservation status (PATCH)",
             description = "USERs can cancel their own reservation (status=CANCELLED). ADMINs can update to any valid status (PENDING, CONFIRMED, CANCELLED).")
     public ResponseEntity<ReservationResponse> updateStatusViaPatch(
             @PathVariable Long id,
             @Valid @RequestBody ReservationStatusUpdateRequest request,
-            Authentication authentication
+            @AuthenticationPrincipal UserPrincipal principal
     ) {
-        boolean isAdmin = authentication.getAuthorities().stream()
-                .map(GrantedAuthority::getAuthority)
-                .anyMatch(a -> a.equals("ROLE_ADMIN"));
-
         ReservationResponse response = reservationService.updateReservationStatus(
                 id,
                 request.getStatus(),
-                authentication.getName(),
-                isAdmin
+                principal.getUsername(),
+                principal.isAdmin()
         );
         return ResponseEntity.ok(response);
     }
@@ -130,9 +95,15 @@ public class ReservationController {
     public ResponseEntity<ReservationResponse> updateStatusViaPut(
             @PathVariable Long id,
             @Valid @RequestBody ReservationStatusUpdateRequest request,
-            Authentication authentication
+            @AuthenticationPrincipal UserPrincipal principal
     ) {
-        return updateStatusViaPatch(id, request, authentication);
+        ReservationResponse response = reservationService.updateReservationStatus(
+                id,
+                request.getStatus(),
+                principal.getUsername(),
+                principal.isAdmin()
+        );
+        return ResponseEntity.ok(response);
     }
 
     @PutMapping("/{id}")

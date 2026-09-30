@@ -6,6 +6,7 @@ import com.exelynt.booking.entity.*;
 import com.exelynt.booking.repository.ReservationRepository;
 import com.exelynt.booking.repository.ResourceRepository;
 import com.exelynt.booking.repository.UserRepository;
+import com.exelynt.booking.security.JwtTokenProvider;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -14,8 +15,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
-import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.security.test.context.support.WithUserDetails;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -26,6 +28,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest
 @AutoConfigureMockMvc
+@Transactional
 public class ReservationControllerIntegrationTest {
 
     @Autowired
@@ -43,6 +46,9 @@ public class ReservationControllerIntegrationTest {
     @Autowired
     private UserRepository userRepository;
 
+    @Autowired
+    private JwtTokenProvider tokenProvider;
+
     private Resource testResource;
     private User testUser;
     private User testOtherUser;
@@ -55,17 +61,18 @@ public class ReservationControllerIntegrationTest {
     }
 
     @Test
-    @WithMockUser(username = "user", roles = {"USER"})
-    @DisplayName("POST /api/reservations - USER creates reservation with identity extracted from JWT")
+    @WithUserDetails("user")
+    @DisplayName("POST /api/reservations - USER creates reservation with identity extracted from JWT, price calculated server-side")
     void testCreateReservation() throws Exception {
         LocalDateTime start = LocalDateTime.now().plusDays(10).withHour(10).withMinute(0).withSecond(0);
         LocalDateTime end = LocalDateTime.now().plusDays(10).withHour(12).withMinute(0).withSecond(0);
 
+        // Even if user sends an arbitrary price, server enforces rate: 2 hours * basePrice (50.00) = 100.00
         ReservationRequest request = new ReservationRequest(
                 testResource.getId(),
                 start,
                 end,
-                new BigDecimal("150.00"),
+                new BigDecimal("999.00"),
                 "Integration test booking"
         );
 
@@ -74,14 +81,61 @@ public class ReservationControllerIntegrationTest {
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.id").isNotEmpty())
-                .andExpect(jsonPath("$.username").value("user")) // Verified identity from token!
+                .andExpect(jsonPath("$.username").value("user"))
                 .andExpect(jsonPath("$.resourceId").value(testResource.getId()))
-                .andExpect(jsonPath("$.totalPrice").value(150.00))
+                .andExpect(jsonPath("$.totalPrice").value(100.00)) // Server enforced price
                 .andExpect(jsonPath("$.status").value("CONFIRMED"));
     }
 
     @Test
-    @WithMockUser(username = "user", roles = {"USER"})
+    @WithUserDetails("admin")
+    @DisplayName("POST /api/reservations - ADMIN creates reservation with custom price override")
+    void testAdminCreateReservationWithCustomPrice() throws Exception {
+        LocalDateTime start = LocalDateTime.now().plusDays(12).withHour(10).withMinute(0).withSecond(0);
+        LocalDateTime end = LocalDateTime.now().plusDays(12).withHour(12).withMinute(0).withSecond(0);
+
+        ReservationRequest request = new ReservationRequest(
+                testResource.getId(),
+                start,
+                end,
+                new BigDecimal("225.50"),
+                "Admin custom priced booking"
+        );
+
+        mockMvc.perform(post("/api/reservations")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.username").value("admin"))
+                .andExpect(jsonPath("$.totalPrice").value(225.50));
+    }
+
+    @Test
+    @DisplayName("POST /api/reservations - Real JWT token in Authorization header passes through JwtAuthenticationFilter")
+    void testRealJwtTokenAuthenticationFilter() throws Exception {
+        String token = tokenProvider.generateToken("user", testUser.getId(), "ROLE_USER");
+        LocalDateTime start = LocalDateTime.now().plusDays(14).withHour(10).withMinute(0).withSecond(0);
+        LocalDateTime end = LocalDateTime.now().plusDays(14).withHour(11).withMinute(0).withSecond(0);
+
+        ReservationRequest request = new ReservationRequest(
+                testResource.getId(),
+                start,
+                end,
+                null,
+                "Real token test booking"
+        );
+
+        mockMvc.perform(post("/api/reservations")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.username").value("user"))
+                .andExpect(jsonPath("$.totalPrice").value(50.00));
+    }
+
+    @Test
+    @WithUserDetails("user")
     @DisplayName("POST /api/reservations - Overlapping reservation triggers 409 Conflict")
     void testOverlappingReservationConflict() throws Exception {
         LocalDateTime start = LocalDateTime.now().plusDays(15).withHour(10).withMinute(0).withSecond(0);
@@ -115,7 +169,7 @@ public class ReservationControllerIntegrationTest {
     }
 
     @Test
-    @WithMockUser(username = "user", roles = {"USER"})
+    @WithUserDetails("user")
     @DisplayName("POST /api/reservations - Invalid time range returns 400 Bad Request")
     void testInvalidTimeRange() throws Exception {
         LocalDateTime start = LocalDateTime.now().plusDays(20).withHour(14).withMinute(0).withSecond(0);
@@ -136,7 +190,7 @@ public class ReservationControllerIntegrationTest {
     }
 
     @Test
-    @WithMockUser(username = "user", roles = {"USER"})
+    @WithUserDetails("user")
     @DisplayName("GET /api/reservations - USER sees only their own reservations")
     void testUserSeesOnlyOwnReservations() throws Exception {
         mockMvc.perform(get("/api/reservations"))
@@ -146,7 +200,7 @@ public class ReservationControllerIntegrationTest {
     }
 
     @Test
-    @WithMockUser(username = "admin", roles = {"ADMIN"})
+    @WithUserDetails("admin")
     @DisplayName("GET /api/reservations - ADMIN sees reservations across all users")
     void testAdminSeesAllReservations() throws Exception {
         mockMvc.perform(get("/api/reservations"))
@@ -155,7 +209,7 @@ public class ReservationControllerIntegrationTest {
     }
 
     @Test
-    @WithMockUser(username = "admin", roles = {"ADMIN"})
+    @WithUserDetails("admin")
     @DisplayName("GET /api/reservations - Filter by status")
     void testFilterByStatus() throws Exception {
         mockMvc.perform(get("/api/reservations")
@@ -165,7 +219,7 @@ public class ReservationControllerIntegrationTest {
     }
 
     @Test
-    @WithMockUser(username = "admin", roles = {"ADMIN"})
+    @WithUserDetails("admin")
     @DisplayName("GET /api/reservations - Filter by price range")
     void testFilterByPriceRange() throws Exception {
         mockMvc.perform(get("/api/reservations")
@@ -177,7 +231,7 @@ public class ReservationControllerIntegrationTest {
     }
 
     @Test
-    @WithMockUser(username = "admin", roles = {"ADMIN"})
+    @WithUserDetails("admin")
     @DisplayName("GET /api/reservations - Pagination and sorting")
     void testPaginationAndSorting() throws Exception {
         mockMvc.perform(get("/api/reservations")
@@ -192,7 +246,7 @@ public class ReservationControllerIntegrationTest {
     }
 
     @Test
-    @WithMockUser(username = "user", roles = {"USER"})
+    @WithUserDetails("user")
     @DisplayName("GET /api/reservations/{id} - USER can view own reservation")
     void testUserCanViewOwnReservation() throws Exception {
         Reservation ownReservation = reservationRepository.findByUserId(testUser.getId()).get(0);
@@ -204,7 +258,7 @@ public class ReservationControllerIntegrationTest {
     }
 
     @Test
-    @WithMockUser(username = "user", roles = {"USER"})
+    @WithUserDetails("user")
     @DisplayName("GET /api/reservations/{id} - USER cannot view another user's reservation (403 Forbidden)")
     void testUserCannotViewOtherReservation() throws Exception {
         Reservation otherReservation = reservationRepository.findByUserId(testOtherUser.getId()).get(0);
@@ -214,7 +268,7 @@ public class ReservationControllerIntegrationTest {
     }
 
     @Test
-    @WithMockUser(username = "user", roles = {"USER"})
+    @WithUserDetails("user")
     @DisplayName("PATCH /api/reservations/{id}/status - USER can cancel their own reservation")
     void testUserCanCancelOwnReservation() throws Exception {
         LocalDateTime start = LocalDateTime.now().plusDays(25).withHour(10).withMinute(0);
@@ -234,7 +288,7 @@ public class ReservationControllerIntegrationTest {
     }
 
     @Test
-    @WithMockUser(username = "user", roles = {"USER"})
+    @WithUserDetails("user")
     @DisplayName("PATCH /api/reservations/{id}/status - USER cannot change status to CONFIRMED (400 Bad Request)")
     void testUserCannotChangeToConfirmed() throws Exception {
         Reservation ownReservation = reservationRepository.findByUserId(testUser.getId()).get(0);
@@ -247,7 +301,7 @@ public class ReservationControllerIntegrationTest {
     }
 
     @Test
-    @WithMockUser(username = "admin", roles = {"ADMIN"})
+    @WithUserDetails("admin")
     @DisplayName("DELETE /api/reservations/{id} - ADMIN can delete reservation")
     void testAdminCanDeleteReservation() throws Exception {
         LocalDateTime start = LocalDateTime.now().plusDays(30).withHour(10).withMinute(0);
@@ -262,7 +316,7 @@ public class ReservationControllerIntegrationTest {
     }
 
     @Test
-    @WithMockUser(username = "user", roles = {"USER"})
+    @WithUserDetails("user")
     @DisplayName("DELETE /api/reservations/{id} - USER cannot delete reservation (403 Forbidden)")
     void testUserCannotDeleteReservation() throws Exception {
         Reservation ownReservation = reservationRepository.findByUserId(testUser.getId()).get(0);

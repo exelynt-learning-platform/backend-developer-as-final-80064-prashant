@@ -2,7 +2,6 @@ package com.exelynt.booking.controller;
 
 import com.exelynt.booking.dto.AuthRequest;
 import com.exelynt.booking.dto.RegisterRequest;
-import com.exelynt.booking.entity.Role;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -11,13 +10,14 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.annotation.Transactional;
 
-import static org.hamcrest.Matchers.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @SpringBootTest
 @AutoConfigureMockMvc
+@Transactional
 public class AuthControllerIntegrationTest {
 
     @Autowired
@@ -81,9 +81,9 @@ public class AuthControllerIntegrationTest {
     }
 
     @Test
-    @DisplayName("POST /auth/register - Register new user returns 201 Created and JWT token")
+    @DisplayName("POST /auth/register - Register new user returns 201 Created and strictly assigns ROLE_USER")
     void testRegisterNewUser() throws Exception {
-        RegisterRequest request = new RegisterRequest("newuser", "newuser@example.com", "password123", Role.ROLE_USER);
+        RegisterRequest request = new RegisterRequest("newuser", "newuser@example.com", "password123");
 
         mockMvc.perform(post("/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -97,7 +97,7 @@ public class AuthControllerIntegrationTest {
     @Test
     @DisplayName("POST /auth/register - Duplicate username returns 400 Bad Request")
     void testRegisterDuplicateUsername() throws Exception {
-        RegisterRequest request = new RegisterRequest("admin", "admin_new@example.com", "password123", Role.ROLE_USER);
+        RegisterRequest request = new RegisterRequest("admin", "admin_new@example.com", "password123");
 
         mockMvc.perform(post("/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)

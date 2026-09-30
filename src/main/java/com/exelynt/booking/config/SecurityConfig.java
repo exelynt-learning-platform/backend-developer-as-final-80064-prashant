@@ -5,6 +5,7 @@ import com.exelynt.booking.security.JwtAuthenticationEntryPoint;
 import com.exelynt.booking.security.JwtAuthenticationFilter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
@@ -27,13 +28,16 @@ public class SecurityConfig {
     private final JwtAuthenticationEntryPoint authenticationEntryPoint;
     private final JwtAccessDeniedHandler accessDeniedHandler;
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final Environment environment;
 
     public SecurityConfig(JwtAuthenticationEntryPoint authenticationEntryPoint,
                           JwtAccessDeniedHandler accessDeniedHandler,
-                          JwtAuthenticationFilter jwtAuthenticationFilter) {
+                          JwtAuthenticationFilter jwtAuthenticationFilter,
+                          Environment environment) {
         this.authenticationEntryPoint = authenticationEntryPoint;
         this.accessDeniedHandler = accessDeniedHandler;
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+        this.environment = environment;
     }
 
     @Bean
@@ -48,6 +52,8 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        boolean isDevEnvironment = !environment.matchesProfiles("prod");
+
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .cors(AbstractHttpConfigurer::disable)
@@ -58,20 +64,24 @@ public class SecurityConfig {
                 .sessionManagement(session -> session
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
                 )
-                .authorizeHttpRequests(auth -> auth
-                        // Public endpoints
-                        .requestMatchers("/auth/**", "/api/auth/**").permitAll()
-                        .requestMatchers(
-                                "/v3/api-docs/**",
-                                "/swagger-ui/**",
-                                "/swagger-ui.html",
-                                "/swagger-resources/**",
-                                "/webjars/**"
-                        ).permitAll()
-                        .requestMatchers("/h2-console/**").permitAll()
+                .authorizeHttpRequests(auth -> {
+                    // Public endpoints
+                    auth.requestMatchers("/auth/**", "/api/auth/**").permitAll();
+                    auth.requestMatchers(
+                            "/v3/api-docs/**",
+                            "/swagger-ui/**",
+                            "/swagger-ui.html",
+                            "/swagger-resources/**",
+                            "/webjars/**"
+                    ).permitAll();
 
-                        // Resource endpoints RBAC
-                        .requestMatchers(HttpMethod.GET, "/api/resources/**").hasAnyRole("USER", "ADMIN")
+                    // Only permit H2 console in non-production environments
+                    if (isDevEnvironment) {
+                        auth.requestMatchers("/h2-console/**").permitAll();
+                    }
+
+                    // Resource endpoints RBAC
+                    auth.requestMatchers(HttpMethod.GET, "/api/resources/**").hasAnyRole("USER", "ADMIN")
                         .requestMatchers(HttpMethod.POST, "/api/resources/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.PUT, "/api/resources/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.DELETE, "/api/resources/**").hasRole("ADMIN")
@@ -84,11 +94,14 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.DELETE, "/api/reservations/**").hasRole("ADMIN")
 
                         // Any other request must be authenticated
-                        .anyRequest().authenticated()
-                )
-                .headers(headers -> headers
-                        .frameOptions(HeadersConfigurer.FrameOptionsConfig::sameOrigin)
-                );
+                        .anyRequest().authenticated();
+                });
+
+        if (isDevEnvironment) {
+            http.headers(headers -> headers
+                    .frameOptions(HeadersConfigurer.FrameOptionsConfig::sameOrigin)
+            );
+        }
 
         http.addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 

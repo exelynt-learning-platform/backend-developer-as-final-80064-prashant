@@ -16,14 +16,25 @@ import java.util.Date;
 public class JwtTokenProvider {
 
     private static final Logger logger = LoggerFactory.getLogger(JwtTokenProvider.class);
+    private static final int MIN_SECRET_LENGTH_BYTES = 32;
 
     private final SecretKey key;
     private final long jwtExpirationInMs;
 
     public JwtTokenProvider(
-            @Value("${app.jwt.secret:defaultSecretKeyForJWTAuthenticationMustBeAtLeast256BitsLong2026!}") String jwtSecret,
+            @Value("${app.jwt.secret}") String jwtSecret,
             @Value("${app.jwt.expiration-ms:86400000}") long jwtExpirationInMs) {
-        this.key = Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
+        
+        if (jwtSecret == null || jwtSecret.trim().isEmpty()) {
+            throw new IllegalStateException("JWT secret configuration 'app.jwt.secret' (or JWT_SECRET environment variable) must be provided and cannot be empty.");
+        }
+
+        byte[] secretBytes = jwtSecret.getBytes(StandardCharsets.UTF_8);
+        if (secretBytes.length < MIN_SECRET_LENGTH_BYTES) {
+            throw new IllegalStateException("JWT secret must be at least 256 bits (32 bytes) long for HMAC-SHA security. Current length: " + secretBytes.length + " bytes.");
+        }
+
+        this.key = Keys.hmacShaKeyFor(secretBytes);
         this.jwtExpirationInMs = jwtExpirationInMs;
     }
 
@@ -76,13 +87,13 @@ public class JwtTokenProvider {
             Jwts.parser().verifyWith(key).build().parseSignedClaims(authToken);
             return true;
         } catch (SecurityException | MalformedJwtException ex) {
-            logger.error("Invalid JWT signature: {}", ex.getMessage());
+            logger.warn("Invalid JWT signature: {}", ex.getMessage());
         } catch (ExpiredJwtException ex) {
-            logger.error("Expired JWT token: {}", ex.getMessage());
+            logger.warn("Expired JWT token: {}", ex.getMessage());
         } catch (UnsupportedJwtException ex) {
-            logger.error("Unsupported JWT token: {}", ex.getMessage());
+            logger.warn("Unsupported JWT token: {}", ex.getMessage());
         } catch (IllegalArgumentException ex) {
-            logger.error("JWT claims string is empty: {}", ex.getMessage());
+            logger.warn("JWT claims string is empty: {}", ex.getMessage());
         }
         return false;
     }

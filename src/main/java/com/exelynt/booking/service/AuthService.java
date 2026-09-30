@@ -58,13 +58,35 @@ public class AuthService {
             throw new BadRequestException("Email is already registered");
         }
 
-        Role assignedRole = request.getRole() != null ? request.getRole() : Role.ROLE_USER;
-
+        // Public registration is strictly restricted to ROLE_USER to prevent privilege escalation
         User user = new User(
                 request.getUsername(),
                 request.getEmail(),
                 passwordEncoder.encode(request.getPassword()),
-                assignedRole
+                Role.ROLE_USER
+        );
+
+        userRepository.save(user);
+
+        String jwt = tokenProvider.generateToken(user.getUsername(), user.getId(), user.getRole().name());
+        return new AuthResponse(jwt, user.getUsername(), user.getRole().name(), tokenProvider.getJwtExpirationInMs());
+    }
+
+    @Transactional
+    public AuthResponse createPrivilegedUser(String username, String email, String password, Role role) {
+        if (userRepository.existsByUsername(username)) {
+            throw new BadRequestException("Username is already taken");
+        }
+
+        if (userRepository.existsByEmail(email)) {
+            throw new BadRequestException("Email is already registered");
+        }
+
+        User user = new User(
+                username,
+                email,
+                passwordEncoder.encode(password),
+                role != null ? role : Role.ROLE_USER
         );
 
         userRepository.save(user);

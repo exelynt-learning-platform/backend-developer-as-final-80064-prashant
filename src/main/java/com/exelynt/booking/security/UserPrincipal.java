@@ -1,5 +1,6 @@
 package com.exelynt.booking.security;
 
+import com.exelynt.booking.entity.Role;
 import com.exelynt.booking.entity.User;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -41,6 +42,11 @@ public class UserPrincipal implements UserDetails {
 
     public String getEmail() {
         return email;
+    }
+
+    public boolean isAdmin() {
+        return authorities.stream()
+                .anyMatch(a -> a.getAuthority().equals(Role.ROLE_ADMIN.name()));
     }
 
     @Override

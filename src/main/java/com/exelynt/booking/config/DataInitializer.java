@@ -6,7 +6,9 @@ import com.exelynt.booking.repository.ResourceRepository;
 import com.exelynt.booking.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.context.annotation.Profile;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
@@ -14,6 +16,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Component
+@Profile("!prod") // Strictly disabled in production
 public class DataInitializer implements CommandLineRunner {
 
     private static final Logger logger = LoggerFactory.getLogger(DataInitializer.class);
@@ -22,6 +25,24 @@ public class DataInitializer implements CommandLineRunner {
     private final ResourceRepository resourceRepository;
     private final ReservationRepository reservationRepository;
     private final PasswordEncoder passwordEncoder;
+
+    @Value("${app.seed.admin-username:admin}")
+    private String adminUsername;
+
+    @Value("${app.seed.admin-password:admin123}")
+    private String adminPassword;
+
+    @Value("${app.seed.admin-email:admin@exelynt.com}")
+    private String adminEmail;
+
+    @Value("${app.seed.user-username:user}")
+    private String userUsername;
+
+    @Value("${app.seed.user-password:user123}")
+    private String userPassword;
+
+    @Value("${app.seed.user-email:user@exelynt.com}")
+    private String userEmail;
 
     public DataInitializer(UserRepository userRepository,
                            ResourceRepository resourceRepository,
@@ -36,21 +57,21 @@ public class DataInitializer implements CommandLineRunner {
     @Override
     public void run(String... args) {
         if (userRepository.count() == 0) {
-            logger.info("Seeding initial users, resources, and reservations...");
+            logger.info("Non-production environment detected. Seeding initial development data...");
 
             // 1. Seed Users
             User admin = new User(
-                    "admin",
-                    "admin@exelynt.com",
-                    passwordEncoder.encode("admin123"),
+                    adminUsername,
+                    adminEmail,
+                    passwordEncoder.encode(adminPassword),
                     Role.ROLE_ADMIN
             );
             userRepository.save(admin);
 
             User user = new User(
-                    "user",
-                    "user@exelynt.com",
-                    passwordEncoder.encode("user123"),
+                    userUsername,
+                    userEmail,
+                    passwordEncoder.encode(userPassword),
                     Role.ROLE_USER
             );
             userRepository.save(user);
@@ -63,7 +84,7 @@ public class DataInitializer implements CommandLineRunner {
             );
             userRepository.save(john);
 
-            logger.info("Seed users created: admin (ROLE_ADMIN), user (ROLE_USER), john_doe (ROLE_USER)");
+            logger.info("Seed users created: {} (ROLE_ADMIN), {} (ROLE_USER), john_doe (ROLE_USER)", adminUsername, userUsername);
 
             // 2. Seed Resources
             Resource boardroom = new Resource(
