@@ -67,12 +67,11 @@ public class ReservationControllerIntegrationTest {
         LocalDateTime start = LocalDateTime.now().plusDays(10).withHour(10).withMinute(0).withSecond(0);
         LocalDateTime end = LocalDateTime.now().plusDays(10).withHour(12).withMinute(0).withSecond(0);
 
-        // Even if user sends an arbitrary price, server enforces rate: 2 hours * basePrice (50.00) = 100.00
         ReservationRequest request = new ReservationRequest(
                 testResource.getId(),
                 start,
                 end,
-                new BigDecimal("999.00"),
+                null,
                 "Integration test booking"
         );
 
@@ -83,8 +82,30 @@ public class ReservationControllerIntegrationTest {
                 .andExpect(jsonPath("$.id").isNotEmpty())
                 .andExpect(jsonPath("$.username").value("user"))
                 .andExpect(jsonPath("$.resourceId").value(testResource.getId()))
-                .andExpect(jsonPath("$.totalPrice").value(100.00)) // Server enforced price
+                .andExpect(jsonPath("$.totalPrice").value(100.00)) // 2 billable hours * 50.00 base rate
                 .andExpect(jsonPath("$.status").value("CONFIRMED"));
+    }
+
+    @Test
+    @WithUserDetails("user")
+    @DisplayName("POST /api/reservations - Regular USER cannot override price (400 Bad Request)")
+    void testUserCannotOverridePrice() throws Exception {
+        LocalDateTime start = LocalDateTime.now().plusDays(11).withHour(10).withMinute(0).withSecond(0);
+        LocalDateTime end = LocalDateTime.now().plusDays(11).withHour(12).withMinute(0).withSecond(0);
+
+        ReservationRequest request = new ReservationRequest(
+                testResource.getId(),
+                start,
+                end,
+                new BigDecimal("10.00"), // Attempted price manipulation
+                "Tampered price booking"
+        );
+
+        mockMvc.perform(post("/api/reservations")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Only administrators can specify custom reservation prices. Standard rates apply for regular users."));
     }
 
     @Test
@@ -243,6 +264,16 @@ public class ReservationControllerIntegrationTest {
                 .andExpect(jsonPath("$.pageNumber").value(0))
                 .andExpect(jsonPath("$.pageSize").value(2))
                 .andExpect(jsonPath("$.content", hasSize(lessThanOrEqualTo(2))));
+    }
+
+    @Test
+    @WithUserDetails("admin")
+    @DisplayName("GET /api/reservations - Invalid sortBy field returns 400 Bad Request")
+    void testInvalidSortByReturns400() throws Exception {
+        mockMvc.perform(get("/api/reservations")
+                        .param("sortBy", "invalidFieldAttack"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", containsString("Invalid sort field")));
     }
 
     @Test

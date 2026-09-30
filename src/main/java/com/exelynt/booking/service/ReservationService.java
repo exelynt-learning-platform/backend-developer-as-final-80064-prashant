@@ -29,13 +29,18 @@ import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Set;
 
 @Service
 public class ReservationService {
 
+    public static final long MINUTES_PER_HOUR = 60L;
     public static final String SORT_ALIAS_PRICE = "price";
     public static final String TARGET_SORT_FIELD_PRICE = "totalPrice";
     public static final String DEFAULT_SORT_FIELD = "createdAt";
+    public static final Set<String> ALLOWED_SORT_FIELDS = Set.of(
+            "createdAt", "startTime", "endTime", "totalPrice", "id", "status"
+    );
 
     private final ReservationRepository reservationRepository;
     private final ResourceRepository resourceRepository;
@@ -51,45 +56,17 @@ public class ReservationService {
 
     @Transactional
     public ReservationResponse createReservation(ReservationRequest request, String currentUsername, boolean isAdmin) {
-        User user = userRepository.findByUsername(currentUsername)
-                .orElseThrow(() -> new BadRequestException("Authenticated user not found: " + currentUsername));
-
-        // Pessimistic lock prevents concurrent double-booking of the same resource
-        Resource resource = resourceRepository.findByIdWithLock(request.getResourceId())
-                .orElseThrow(() -> new ResourceNotFoundException("Resource not found with id: " + request.getResourceId()));
+        User user = resolveUser(currentUsername);
+        Resource resource = resolveResourceWithLock(request.getResourceId());
 
         if (!resource.isAvailable()) {
             throw new BadRequestException("Resource '" + resource.getName() + "' is not available for booking");
         }
 
-        validateTimesForCreation(request.getStartTime(), request.getEndTime());
+        validateTimes(request.getStartTime(), request.getEndTime(), false);
+        ensureNoOverlap(resource.getId(), request.getStartTime(), request.getEndTime(), null, resource.getName());
 
-        // Check for conflicting reservations on the same resource
-        List<Reservation> conflicts = reservationRepository.findOverlappingReservations(
-                resource.getId(),
-                request.getStartTime(),
-                request.getEndTime(),
-                ReservationStatus.CANCELLED
-        );
-
-        if (!conflicts.isEmpty()) {
-            throw new ReservationConflictException(
-                    "Resource '" + resource.getName() + "' is already reserved during the requested time window (" +
-                            request.getStartTime() + " to " + request.getEndTime() + ")"
-            );
-        }
-
-        // Price calculation: Only ADMIN can supply manual price overrides to prevent user manipulation
-        BigDecimal totalPrice;
-        if (isAdmin && request.getPrice() != null && request.getPrice().compareTo(BigDecimal.ZERO) >= 0) {
-            totalPrice = request.getPrice().setScale(2, RoundingMode.HALF_UP);
-        } else {
-            long minutes = Duration.between(request.getStartTime(), request.getEndTime()).toMinutes();
-            long billableHours = Math.max(1L, (minutes + 59) / 60); // Round up to nearest whole hour, min 1
-            totalPrice = resource.getBasePrice()
-                    .multiply(BigDecimal.valueOf(billableHours))
-                    .setScale(2, RoundingMode.HALF_UP);
-        }
+        BigDecimal totalPrice = calculateTotalPrice(isAdmin, request, resource);
 
         Reservation reservation = new Reservation(
                 user,
@@ -113,8 +90,7 @@ public class ReservationService {
     ) {
         Long userId = null;
         if (!isAdmin) {
-            User user = userRepository.findByUsername(currentUsername)
-                    .orElseThrow(() -> new BadRequestException("Authenticated user not found: " + currentUsername));
+            User user = resolveUser(currentUsername);
             userId = user.getId();
         }
 
@@ -126,6 +102,11 @@ public class ReservationService {
         // Map client friendly sort property aliases
         if (SORT_ALIAS_PRICE.equalsIgnoreCase(property)) {
             property = TARGET_SORT_FIELD_PRICE;
+        }
+
+        // Whitelist validation to prevent injection or unknown property leakage
+        if (!ALLOWED_SORT_FIELDS.contains(property)) {
+            throw new BadRequestException("Invalid sort field: '" + property + "'. Allowed sort fields are: " + ALLOWED_SORT_FIELDS);
         }
 
         Pageable pageable = PageRequest.of(filter.getPage(), filter.getSize(), Sort.by(direction, property));
@@ -168,16 +149,8 @@ public class ReservationService {
         } else {
             // Admin is updating status; if changing to active status from CANCELLED, verify overlap
             if (reservation.getStatus() == ReservationStatus.CANCELLED && newStatus != ReservationStatus.CANCELLED) {
-                List<Reservation> conflicts = reservationRepository.findOverlappingReservationsExcludingId(
-                        reservation.getResource().getId(),
-                        reservation.getId(),
-                        reservation.getStartTime(),
-                        reservation.getEndTime(),
-                        ReservationStatus.CANCELLED
-                );
-                if (!conflicts.isEmpty()) {
-                    throw new ReservationConflictException("Cannot reactivate reservation: Conflicting reservation exists");
-                }
+                ensureNoOverlap(reservation.getResource().getId(), reservation.getStartTime(), reservation.getEndTime(),
+                        reservation.getId(), reservation.getResource().getName());
             }
         }
 
@@ -191,22 +164,10 @@ public class ReservationService {
         Reservation reservation = reservationRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Reservation not found with id: " + id));
 
-        Resource resource = resourceRepository.findByIdWithLock(request.getResourceId())
-                .orElseThrow(() -> new ResourceNotFoundException("Resource not found with id: " + request.getResourceId()));
+        Resource resource = resolveResourceWithLock(request.getResourceId());
 
-        validateTimesForUpdate(request.getStartTime(), request.getEndTime());
-
-        List<Reservation> conflicts = reservationRepository.findOverlappingReservationsExcludingId(
-                resource.getId(),
-                reservation.getId(),
-                request.getStartTime(),
-                request.getEndTime(),
-                ReservationStatus.CANCELLED
-        );
-
-        if (!conflicts.isEmpty()) {
-            throw new ReservationConflictException("Resource is already reserved for the specified time range");
-        }
+        validateTimes(request.getStartTime(), request.getEndTime(), true);
+        ensureNoOverlap(resource.getId(), request.getStartTime(), request.getEndTime(), reservation.getId(), resource.getName());
 
         reservation.setResource(resource);
         reservation.setStartTime(request.getStartTime());
@@ -214,9 +175,7 @@ public class ReservationService {
         if (request.getPrice() != null && request.getPrice().compareTo(BigDecimal.ZERO) >= 0) {
             reservation.setTotalPrice(request.getPrice().setScale(2, RoundingMode.HALF_UP));
         } else {
-            long minutes = Duration.between(request.getStartTime(), request.getEndTime()).toMinutes();
-            long billableHours = Math.max(1L, (minutes + 59) / 60);
-            reservation.setTotalPrice(resource.getBasePrice().multiply(BigDecimal.valueOf(billableHours)).setScale(2, RoundingMode.HALF_UP));
+            reservation.setTotalPrice(calculateBillablePrice(resource, request.getStartTime(), request.getEndTime()));
         }
         reservation.setNotes(request.getNotes());
 
@@ -232,28 +191,71 @@ public class ReservationService {
         reservationRepository.deleteById(id);
     }
 
-    private void validateTimesForCreation(LocalDateTime startTime, LocalDateTime endTime) {
-        if (startTime == null || endTime == null) {
-            throw new BadRequestException("Start time and end time are required");
+    // --- Private Helper Methods (SRP, DRY & Maintainability) ---
+
+    private User resolveUser(String username) {
+        return userRepository.findByUsername(username)
+                .orElseThrow(() -> new BadRequestException("Authenticated user not found: " + username));
+    }
+
+    private Resource resolveResourceWithLock(Long resourceId) {
+        return resourceRepository.findByIdWithLock(resourceId)
+                .orElseThrow(() -> new ResourceNotFoundException("Resource not found with id: " + resourceId));
+    }
+
+    private void ensureNoOverlap(Long resourceId, LocalDateTime start, LocalDateTime end, Long excludeReservationId, String resourceName) {
+        List<Reservation> conflicts;
+        if (excludeReservationId != null) {
+            conflicts = reservationRepository.findOverlappingReservationsExcludingId(
+                    resourceId, excludeReservationId, start, end, ReservationStatus.CANCELLED
+            );
+        } else {
+            conflicts = reservationRepository.findOverlappingReservations(
+                    resourceId, start, end, ReservationStatus.CANCELLED
+            );
         }
 
-        if (!startTime.isBefore(endTime)) {
-            throw new BadRequestException("Start time must be before end time");
-        }
-
-        // Allow 60 seconds clock skew tolerance for validation
-        if (startTime.isBefore(LocalDateTime.now().minusSeconds(60))) {
-            throw new BadRequestException("Start time cannot be in the past");
+        if (!conflicts.isEmpty()) {
+            throw new ReservationConflictException(
+                    "Resource '" + resourceName + "' is already reserved during the requested time window (" +
+                            start + " to " + end + ")"
+            );
         }
     }
 
-    private void validateTimesForUpdate(LocalDateTime startTime, LocalDateTime endTime) {
+    private BigDecimal calculateTotalPrice(boolean isAdmin, ReservationRequest request, Resource resource) {
+        if (request.getPrice() != null) {
+            if (!isAdmin) {
+                throw new BadRequestException("Only administrators can specify custom reservation prices. Standard rates apply for regular users.");
+            }
+            if (request.getPrice().compareTo(BigDecimal.ZERO) < 0) {
+                throw new BadRequestException("Reservation price cannot be negative");
+            }
+            return request.getPrice().setScale(2, RoundingMode.HALF_UP);
+        }
+        return calculateBillablePrice(resource, request.getStartTime(), request.getEndTime());
+    }
+
+    private BigDecimal calculateBillablePrice(Resource resource, LocalDateTime startTime, LocalDateTime endTime) {
+        long minutes = Duration.between(startTime, endTime).toMinutes();
+        long billableHours = Math.max(1L, (minutes + MINUTES_PER_HOUR - 1) / MINUTES_PER_HOUR);
+        return resource.getBasePrice()
+                .multiply(BigDecimal.valueOf(billableHours))
+                .setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private void validateTimes(LocalDateTime startTime, LocalDateTime endTime, boolean allowPast) {
         if (startTime == null || endTime == null) {
             throw new BadRequestException("Start time and end time are required");
         }
 
         if (!startTime.isBefore(endTime)) {
             throw new BadRequestException("Start time must be before end time");
+        }
+
+        // Allow 60 seconds tolerance for clock skew on creation
+        if (!allowPast && startTime.isBefore(LocalDateTime.now().minusSeconds(60))) {
+            throw new BadRequestException("Start time cannot be in the past");
         }
     }
 }

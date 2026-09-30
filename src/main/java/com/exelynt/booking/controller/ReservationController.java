@@ -88,23 +88,6 @@ public class ReservationController {
         return ResponseEntity.ok(response);
     }
 
-    @PutMapping("/{id}/status")
-    @PreAuthorize("hasAnyRole('USER', 'ADMIN')")
-    @Operation(summary = "Update reservation status (PUT alternative)",
-            description = "Alternative endpoint for status update. USERs can cancel their own reservation; ADMINs can set any status.")
-    public ResponseEntity<ReservationResponse> updateStatusViaPut(
-            @PathVariable Long id,
-            @Valid @RequestBody ReservationStatusUpdateRequest request,
-            @AuthenticationPrincipal UserPrincipal principal
-    ) {
-        ReservationResponse response = reservationService.updateReservationStatus(
-                id,
-                request.getStatus(),
-                principal.getUsername(),
-                principal.isAdmin()
-        );
-        return ResponseEntity.ok(response);
-    }
 
     @PutMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN')")

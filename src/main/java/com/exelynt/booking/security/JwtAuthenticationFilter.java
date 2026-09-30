@@ -52,8 +52,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             }
         } catch (AuthenticationException ex) {
             logger.warn("Authentication failed for request to {}: {}", request.getRequestURI(), ex.getMessage());
-        } catch (Exception ex) {
-            logger.error("Infrastructure or unexpected error setting user authentication in security context", ex);
+        } catch (RuntimeException ex) {
+            logger.error("Infrastructure error during authentication processing at path {}: {}", request.getRequestURI(), ex.getMessage(), ex);
+            throw ex;
         }
 
         filterChain.doFilter(request, response);

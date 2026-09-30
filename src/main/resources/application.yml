@@ -4,6 +4,8 @@ server:
 spring:
   application:
     name: resource-booking-system
+  profiles:
+    default: dev
 
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:h2:mem:bookingdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL}
@@ -22,13 +24,23 @@ spring:
 
   h2:
     console:
-      enabled: true
+      enabled: ${H2_CONSOLE_ENABLED:true}
       path: /h2-console
 
 app:
   jwt:
-    secret: ${JWT_SECRET:9a4f2c8d3b7a1e6f4c8b0d2e5a7f9c1b3d5e7a9c1b3d5e7a9c1b3d5e7a9c1b3d}
-    expiration-ms: ${JWT_EXPIRATION_MS:86400000} # 24 hours
+    secret: ${JWT_SECRET}
+    expiration-ms: ${JWT_EXPIRATION_MS:86400000}
+  seed:
+    enabled: ${APP_SEED_ENABLED:true}
+    admin-username: ${SEED_ADMIN_USER:admin}
+    admin-password: ${SEED_ADMIN_PASS:admin123}
+    admin-email: ${SEED_ADMIN_EMAIL:admin@exelynt.com}
+    user-username: ${SEED_USER_NAME:user}
+    user-password: ${SEED_USER_PASS:user123}
+    user-email: ${SEED_USER_EMAIL:user@exelynt.com}
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:*}
 
 springdoc:
   api-docs:

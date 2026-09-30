@@ -227,13 +227,15 @@ export SPRING_DATASOURCE_PASSWORD="your_password"
 | Variable | Default Value | Description |
 |---|---|---|
 | `PORT` | `8080` | HTTP Server port |
-| `SPRING_PROFILES_ACTIVE` | `default` | Active profile (`default`, `mysql`, `postgres`) |
+| `SPRING_PROFILES_ACTIVE` | `dev` | Active profile (`dev`, `mysql`, `postgres`) |
+| `JWT_SECRET` | *(required in non-dev)* | 256-bit secret key for signing JWTs (fail-fast validation) |
+| `JWT_EXPIRATION_MS` | `86400000` (24h) | JWT validity duration in milliseconds |
+| `APP_SEED_ENABLED` | `true` (dev) / `false` (prod) | Explicit opt-in flag for DataInitializer seeding |
+| `CORS_ALLOWED_ORIGINS` | `*` | Allowed CORS origins (configured via CorsConfigurationSource) |
 | `SPRING_DATASOURCE_URL` | `jdbc:h2:mem:bookingdb...` | JDBC connection URL |
 | `SPRING_DATASOURCE_USERNAME` | `sa` | Database username |
 | `SPRING_DATASOURCE_PASSWORD` | *(empty)* | Database password |
-| `JWT_SECRET` | *(pre-configured secure 256-bit key)* | Secret key for signing JWTs |
-| `JWT_EXPIRATION_MS` | `86400000` (24h) | JWT validity duration in milliseconds |
-| `SPRING_JPA_HIBERNATE_DDL_AUTO` | `update` | Hibernate schema update strategy |
+| `SPRING_JPA_HIBERNATE_DDL_AUTO` | `validate` (prod) / `update` (dev) | Hibernate schema update strategy |
 
 ---
 
@@ -338,4 +340,6 @@ The test suite covers unit and integration tests across authentication, authoriz
 ### Test Suite Summary:
 - **`AuthControllerIntegrationTest`**: Login flow, token generation, invalid credentials, user registration, duplicate username handling.
 - **`ResourceControllerIntegrationTest`**: Unauthenticated 401 check, USER read-only enforcement, USER 403 Forbidden on create/update/delete, ADMIN full CRUD.
-- **`ReservationControllerIntegrationTest`**: JWT identity extraction, overlapping booking conflict (409 Conflict), start/end time validation, USER ownership isolation (cannot see or cancel others' bookings), ADMIN global visibility, status/price filtering, pagination, and sorting.
+- **`ReservationControllerIntegrationTest`**: JWT identity extraction, overlapping booking conflict (409 Conflict), start/end time validation, USER ownership isolation, non-admin price override rejection, invalid sortBy parameter rejection, ADMIN global visibility, status/price filtering, pagination, and sorting.
+- **`ResourceBookingApplicationTests`**: Spring context bootstrap and configuration verification.
+- **Total: 33 tests passing with 0 failures.**
