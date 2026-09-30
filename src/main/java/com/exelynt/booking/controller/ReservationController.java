@@ -47,7 +47,7 @@ public class ReservationController {
     @Operation(summary = "Get reservations with filtering, pagination, and sorting",
             description = "ADMINs see all reservations across all users. Regular USERs see only their own reservations. Supports filtering by status, minPrice, maxPrice, and pagination/sorting.")
     public ResponseEntity<PaginatedResponse<ReservationResponse>> getReservations(
-            @ParameterObject @ModelAttribute ReservationQueryFilter filter,
+            @Valid @ParameterObject @ModelAttribute ReservationQueryFilter filter,
             @AuthenticationPrincipal UserPrincipal principal
     ) {
         PaginatedResponse<ReservationResponse> response = reservationService.getReservations(

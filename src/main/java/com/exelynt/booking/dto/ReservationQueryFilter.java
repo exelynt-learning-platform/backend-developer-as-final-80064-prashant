@@ -2,6 +2,8 @@ package com.exelynt.booking.dto;
 
 import com.exelynt.booking.entity.ReservationStatus;
 import io.swagger.v3.oas.annotations.Parameter;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 
 import java.math.BigDecimal;
 
@@ -17,9 +19,12 @@ public class ReservationQueryFilter {
     private BigDecimal maxPrice;
 
     @Parameter(description = "Page number (0-indexed, default: 0)")
+    @Min(value = 0, message = "Page index must not be negative")
     private int page = 0;
 
-    @Parameter(description = "Number of items per page (default: 10)")
+    @Parameter(description = "Number of items per page (default: 10, max: 100)")
+    @Min(value = 1, message = "Page size must be at least 1")
+    @Max(value = 100, message = "Page size must not exceed 100")
     private int size = 10;
 
     @Parameter(description = "Field to sort by (e.g., createdAt, totalPrice, startTime)")

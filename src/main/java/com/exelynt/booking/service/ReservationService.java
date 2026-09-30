@@ -29,16 +29,17 @@ import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Set;
 
 @Service
 public class ReservationService {
 
     public static final long MINUTES_PER_HOUR = 60L;
+    public static final long ALLOWED_CLOCK_SKEW_SECONDS = 60L;
+    public static final int MAX_PAGE_SIZE = 100;
     public static final String SORT_ALIAS_PRICE = "price";
     public static final String TARGET_SORT_FIELD_PRICE = "totalPrice";
     public static final String DEFAULT_SORT_FIELD = "createdAt";
-    public static final Set<String> ALLOWED_SORT_FIELDS = Set.of(
+    public static final List<String> ALLOWED_SORT_FIELDS = List.of(
             "createdAt", "startTime", "endTime", "totalPrice", "id", "status"
     );
 
@@ -88,6 +89,14 @@ public class ReservationService {
             String currentUsername,
             boolean isAdmin
     ) {
+        // Enforce pagination boundaries against negative indices or unbounded DoS requests
+        if (filter.getPage() < 0) {
+            throw new BadRequestException("Page index must not be negative");
+        }
+        if (filter.getSize() < 1 || filter.getSize() > MAX_PAGE_SIZE) {
+            throw new BadRequestException("Page size must be between 1 and " + MAX_PAGE_SIZE);
+        }
+
         Long userId = null;
         if (!isAdmin) {
             User user = resolveUser(currentUsername);
@@ -104,7 +113,7 @@ public class ReservationService {
             property = TARGET_SORT_FIELD_PRICE;
         }
 
-        // Whitelist validation to prevent injection or unknown property leakage
+        // Whitelist validation with deterministic error output
         if (!ALLOWED_SORT_FIELDS.contains(property)) {
             throw new BadRequestException("Invalid sort field: '" + property + "'. Allowed sort fields are: " + ALLOWED_SORT_FIELDS);
         }
@@ -137,6 +146,9 @@ public class ReservationService {
         Reservation reservation = reservationRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Reservation not found with id: " + id));
 
+        // Acquire pessimistic lock on the underlying resource to prevent status-transition race condition
+        Resource resource = resolveResourceWithLock(reservation.getResource().getId());
+
         if (!isAdmin) {
             // Regular user can only access their own reservation
             if (!reservation.getUser().getUsername().equals(currentUsername)) {
@@ -147,10 +159,10 @@ public class ReservationService {
                 throw new BadRequestException("Users are only permitted to cancel their reservations");
             }
         } else {
-            // Admin is updating status; if changing to active status from CANCELLED, verify overlap
+            // Admin is updating status; if changing to active status from CANCELLED, verify overlap under lock
             if (reservation.getStatus() == ReservationStatus.CANCELLED && newStatus != ReservationStatus.CANCELLED) {
-                ensureNoOverlap(reservation.getResource().getId(), reservation.getStartTime(), reservation.getEndTime(),
-                        reservation.getId(), reservation.getResource().getName());
+                ensureNoOverlap(resource.getId(), reservation.getStartTime(), reservation.getEndTime(),
+                        reservation.getId(), resource.getName());
             }
         }
 
@@ -253,8 +265,8 @@ public class ReservationService {
             throw new BadRequestException("Start time must be before end time");
         }
 
-        // Allow 60 seconds tolerance for clock skew on creation
-        if (!allowPast && startTime.isBefore(LocalDateTime.now().minusSeconds(60))) {
+        // Allow configured tolerance for clock skew on creation
+        if (!allowPast && startTime.isBefore(LocalDateTime.now().minusSeconds(ALLOWED_CLOCK_SKEW_SECONDS))) {
             throw new BadRequestException("Start time cannot be in the past");
         }
     }
